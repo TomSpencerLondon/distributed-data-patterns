@@ -153,3 +153,17 @@ We use the contracts to test the controller. With the same contract testing docu
 two components can communicate effectively. This can help minimize end-to-end tests.
 
 
+### Testing in production
+- challenge
+  - end-to-end testing is brittle, slow and costly
+  - end-to-end tests are a simulation of production
+  - no matter how much we test issues will appear in production
+- Therefore:
+  - separate deployment (running in production) from release (available to users)
+  - test deployed code before releasing
+  - automate for fast deployment, rollback and roll forward
+
+We can use Canary deployment and route test traffic through the new version of services to ensure that the service works
+effectively.
+
+
