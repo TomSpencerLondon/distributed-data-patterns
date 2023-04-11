@@ -45,3 +45,5 @@ Top tip: Start with one service per team and only split service if it solves a p
 which is excessive.
 
 ![image](https://user-images.githubusercontent.com/27693622/231153787-7274b0bb-015c-41d6-bde8-522d58a0a65b.png)
+
+The above diagram shows individual services and functional decomposition on the front end to query each service.
