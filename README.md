@@ -46,4 +46,18 @@ which is excessive.
 
 ![image](https://user-images.githubusercontent.com/27693622/231155137-52de4117-5e7d-4e7a-8077-6edab00e0c16.png)
 
-The above diagram shows individual services and functional decomposition on the front end to query each service.
+The above diagram shows individual services and functional decomposition on the front end to query each service. The complexity can be a downside
+but there are some benefits:
+- maintainability: small service => easier to understand and change
+- modularity: service API is impermeable => enforces modularity
+- evolvability: evolve each service's technology stack independently
+- testability: small service => easier and faster to test
+- deployability: each service is independently deployable
+
+This can increase scalability and fault tolerance. Interprocess communication and partial failure and distributed data can increase complexity.
+There are challenges for integration testing. Each service is its own application and this can increase deployment challenges.
+Identifying service boundaries is challenging - getting it wrong can lead to a distributed monolith anti-pattern. Refactoring to microservices
+can take a long time. We are now going to talk about the individual services. Traditional 3 tiered architecture doesn't reflect reality:
+Presentation, Business Logic and Persistence are not only single. We can use hexagonal architecture to describe the individual microservice
+architectures. 
+
