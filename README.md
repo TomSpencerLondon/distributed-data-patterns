@@ -114,4 +114,6 @@ the request is accepted.
 The goal of Microservices is to enable Devops which requires automated testing. The complexity of the architecture
 requires good automated testing.
 
+![image](https://user-images.githubusercontent.com/27693622/231181790-7facd428-5b0d-485d-b4b4-15e6429f52f0.png)
+
 
