@@ -12,4 +12,5 @@ The application is used in hands-on labs that are part of a [microservices servi
 - long-lived = modularity, evolvability
 
 Standard architecture is monolithic architecture:
+![image](https://user-images.githubusercontent.com/27693622/231139288-68a26bc6-fe05-4ca4-ba8e-67af8518549f.png)
 
