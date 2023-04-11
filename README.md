@@ -62,3 +62,28 @@ Presentation, Business Logic and Persistence are not only single. We can use hex
 architectures. 
 
 ![image](https://user-images.githubusercontent.com/27693622/231159986-c74647e8-ea1c-4abd-a756-585040524490.png)
+
+The reason for a service and team is to expose an API including: Commands that change data, Queries that extract data without modifying it. Often it is
+better to use Asynchronous messaging to reduce coupling between components. It is common for services to emit events to signal that the state of the business
+object has changed. The service may invoke other services and subscribe to events.
+
+### Types of coupling
+Coupling is inevitable but must be loose. There are two types of coupling:
+- runtime coupling - order service cannot respond to a synchronous request until another service responds
+- Design time coupling - changes to a service can involve changing the client
+
+Design time coupling can be difficult because it forces teams to coordinate work. Cross team collaboration slows down development. Decision making within the
+team is ten times faster than cross team collaboration. The service should be able to change without changing the API. We should avoid sharing database tables in
+microservices.
+
+Run time coupling can occur when two services are using the same database blocking the other service from doing its work. Ideally we should use separate databases for
+each service.
+
+### Runtime coupling
+The trouble with synchronous interprocess communications is that they can lead to reduced availability. Synchronous coupling can make the services less available.
+Method calls are fast but services syncrhonously calling each other can inhibit response times. 
+Regarding asynchronout messaging Chris Richardson mentions [Enterprise Integration Patterns, Gregor Hohpe](https://www.amazon.co.uk/Enterprise-Integration-Patterns-Designing-Addison-Wesley-ebook/dp/B007MQLL4E/ref=tmm_kin_swatch_0?_encoding=UTF8&qid=1681216342&sr=8-1):
+
+![image](https://user-images.githubusercontent.com/27693622/231164747-7f1e3e81-362b-432a-93bc-c41d5726a724.png)
+
+
