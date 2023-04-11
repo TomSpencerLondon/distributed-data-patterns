@@ -86,4 +86,4 @@ Regarding asynchronout messaging Chris Richardson mentions [Enterprise Integrati
 
 ![image](https://user-images.githubusercontent.com/27693622/231164747-7f1e3e81-362b-432a-93bc-c41d5726a724.png)
 
-
+The sender sends a message over a channel to a recipient.
