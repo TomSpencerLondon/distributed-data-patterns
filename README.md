@@ -107,3 +107,11 @@ https://microservices.io/patterns/data/cqrs.html
 
 ![image](https://user-images.githubusercontent.com/27693622/231172329-ed4753dd-8652-4351-8d7d-bd4335532ac5.png)
 
+The responsibility of knowing the credit is owned by the Order Service. The response can then tell immediately whether
+the request is accepted.
+
+### Testing
+The goal of Microservices is to enable Devops which requires automated testing. The complexity of the architecture
+requires good automated testing.
+
+
