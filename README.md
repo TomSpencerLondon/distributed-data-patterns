@@ -166,4 +166,51 @@ two components can communicate effectively. This can help minimize end-to-end te
 We can use Canary deployment and route test traffic through the new version of services to ensure that the service works
 effectively.
 
+### Transactions and Queries in Microservice Architecture
+Distributed data patterns are important for transtactions and queries with Microservices.
+We use the Saga pattern to enable transactions across services.
+
+https://microservices.io/patterns/data/saga.html
+
+![image](https://user-images.githubusercontent.com/27693622/231235236-e8815745-5892-4076-862b-b8cca95d3ccf.png)
+
+It is not correct to do joins across services:
+```sql
+SELECT DISTINCT c.*
+FROM CUSTOMER c, ORDER o
+WHERE
+    c.id = o.ID
+        AND c.id = ?
+        AND o.PAID_DATE >= ?
+```
+Joins within services are fine but across services would lead to design-time coupling.
+There are two patterns for queries across services:
+- API composition
+- CQRS
+
+CQRS is more powerful.
+
+https://microservices.io/patterns/index.html#data-management
+
+This is API composition:
+![image](https://user-images.githubusercontent.com/27693622/231240010-21fba972-3daf-467d-9829-4bfc94ea12c3.png)
+
+It is simple but can be inefficient involving too many round trips on the network.
+
+This is CQRS:
+![image](https://user-images.githubusercontent.com/27693622/231243611-7cc5b72b-b129-480d-993b-e80994d8b8cd.png)
+
+It is more flexible but more complex and eventually consistent.
+This is a helpful overview of the different patterns:
+"A query that spans services cannot simply join across service databases since that's design-time coupling. ==> use the API Composition or CQRS patterns.
+
+A command that spans services cannot use traditional distributed transactions since that's tight runtime coupling. ==> use the Saga pattern."
+
+### Saga coordination
+#### Choreography Based Sagas
+- coordination logic = code that publishes events and event handlers
+- when a saga participant participant updates a business object, it publishes domain events announcing what it has done
+- Saga participants have event handlers that update business objects
+
+![image](https://user-images.githubusercontent.com/27693622/231249333-f90c8688-bf4c-4a17-ad66-197cc498627f.png)
 
