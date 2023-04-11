@@ -45,3 +45,4 @@ Top tip: Start with one service per team and only split service if it solves a p
 which is excessive.
 
 
+![image](https://user-images.githubusercontent.com/27693622/231152521-dc0dc50d-3161-4368-9601-96bafa01c8d9.png)
