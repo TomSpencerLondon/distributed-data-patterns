@@ -94,3 +94,16 @@ The sender sends a message over a channel to a recipient.
   - point-to-point - deliver to one recipient
   - publish-subscribe - deliver to all recipients
 
+### Sagas
+https://microservices.io/patterns/data/saga.html
+
+![image](https://user-images.githubusercontent.com/27693622/231169706-6658a4d2-004a-4ad2-9428-23627ca54811.png)
+
+The Order Service returns immediately and the Customer Service confirms whether if the order is possible.
+There is more availability but this is an eventually consistent design. The response doesn't validate the outcome immediately.
+
+Another option to reduce is CQRS:
+https://microservices.io/patterns/data/cqrs.html
+
+![image](https://user-images.githubusercontent.com/27693622/231172329-ed4753dd-8652-4351-8d7d-bd4335532ac5.png)
+
