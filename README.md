@@ -116,4 +116,40 @@ requires good automated testing.
 
 ![image](https://user-images.githubusercontent.com/27693622/231181790-7facd428-5b0d-485d-b4b4-15e6429f52f0.png)
 
+### Deployment pipeline - laptop to production
+![image](https://user-images.githubusercontent.com/27693622/231222597-ec607498-5d35-4ed4-b3d6-4ba7931187eb.png)
+
+### Deployment pipeline per service
+
+![image](https://user-images.githubusercontent.com/27693622/231224768-b9e027c5-dded-4cce-857a-7809cf037201.png)
+
+Testing should be made at the service level.
+
+### Consumer-driven contract testing
+Verify that a service (a.k.a provider) and its clients (a.k.a consumers) can communicate while testing them in isolation.
+
+### Contract testing example
+![image](https://user-images.githubusercontent.com/27693622/231228289-5776856d-3534-43b0-b298-b5a1e0bb5b0a.png)
+
+This is an example of a contract test:
+```groovy
+org.springframework.cloud.contract.spec.Contract.make {
+    request {
+      method 'GET'
+      url '/orders/99'
+    }
+    response {
+      status 200
+      headers {
+        header('Content-Type': 'application/json;charset=UTF-8')
+      }
+      body('''{"orderId": "99", "state": "APPROVAL_PENDING"}''')
+    }
+}
+```
+
+The above is API definition by example. Wiremock simulates the Order Service and simulates the API.
+We use the contracts to test the controller. With the same contract testing document we ensure that the
+two components can communicate effectively. This can help minimize end-to-end tests.
+
 
