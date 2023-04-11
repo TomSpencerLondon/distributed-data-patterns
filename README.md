@@ -41,3 +41,7 @@ The microservice architecture is an architectural style that structures an appli
 - organized around business capabilities
 - owned by a small team
 
+Top tip: Start with one service per team and only split service if it solves a problem. Monzo, for instance, has ten services per developer
+which is excessive.
+
+
