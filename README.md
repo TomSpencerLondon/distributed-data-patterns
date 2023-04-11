@@ -226,3 +226,75 @@ A command that spans services cannot use traditional distributed transactions si
 
 https://github.com/eventuate-examples/eventuate-examples-java-customers-and-orders
 
+This is an example of the Order Service publishing domain events:
+https://github.com/eventuate-tram/eventuate-tram-examples-customers-and-orders
+```java
+public class OrderService {
+    
+    @Autowired
+    private DomainEventPublisher domainEventPublisher;
+    
+    @Autowired
+    private OrderRepository orderRepository;
+    
+    @Transactional
+    public Order createOrder(OrderDetails orderDetails) {
+        Order order = Order.createOrder(orderDetails);
+        orderRepository.save(order);
+        domainEventPublisher.publish(Order.class,
+                order.getId(),
+                singletonList(new OrderCreatedEvent(order.getId(), orderDetails)));
+        return order;
+    }
+}
+```
+Here we publish the event of creating an Order. There is then a consumer for the createOrderEvent:
+
+```java
+import java.util.Collections;
+
+public class OrderEventConsumer {
+  @Autowired
+  private CustomerRepository customerRepository;
+
+  @Autowired
+  private DomainEventPublisher domainEventPublisher;
+
+  public DomainEventHandlers domainEventHandlers() {
+    return DomainEventHandlersBuilder
+            .forAggregateType("io.eventuate.examples.tram.ordersandcustomers.orders.domain.Order")
+            .onEvent(OrderCreatedEvent.class, this::orderCreatedEventHandler)
+            .build();
+  }
+
+  private void orderCreatedEventHandler(DomainEventEnvelope<OrderCreatedEvent> domainEventEnvelope) {
+    OrderCreatedEvent orderCreatedEvent = domainEventEnvelope.getEvent();
+    Customer customer = customerRepository
+            .findOne(orderCreatedEvent.getOrderDetails().getCustomerId());
+
+    try {
+      customer.reserveCredit(orderCreatedEvent.getOrderId(),
+              orderCreatedEvent.getOrderDetails().getOrderTotal());
+
+      CustomerCreditReservedEvent customerCreditReservedEvent =
+              new CustomerCreditReservedEvent(orderCreatedEvent.getOrderId());
+      domainEventPublisher.publish(Customer.class,
+              customer.getId(),
+              Collections.singletonList(customerCreditReservedEvent));
+    } catch (CustomerCreditLimitExceededException e) {
+        CustomerCreditReservationFailedEvent customerCreditReservationFailedEvent =
+                new CustomerCreditReservationFailedEvent(orderCreatedEvent.getOrderId());
+        
+        domainEventPublisher.publish(Customer.class,
+                customer.getId(),
+                Collections.singletonList(customerCreditReservationFailedEvent));
+    }
+  }
+}
+```
+
+The orderCreatedEventHandler attempts to reserve credit and if successful it publishes the CustomerCreditReservedEvent otherwise
+it publishes a CustomerCreditReservationFailedEvent.
+
+
+
