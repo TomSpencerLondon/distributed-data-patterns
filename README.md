@@ -214,3 +214,15 @@ A command that spans services cannot use traditional distributed transactions si
 
 ![image](https://user-images.githubusercontent.com/27693622/231249333-f90c8688-bf4c-4a17-ad66-197cc498627f.png)
 
+### Benefits and drawbacks of choreography
+#### Benefits
+- often simple especially when using event sourcing
+- loose runtime coupling
+
+#### Drawbacks
+- Decentralized implementation - potentially difficult to understand
+- Risk of excessive design time coupling - e.g. Customer Service must know about Order events that affect credit
+- Cyclic dependencies - services listen to each other's events
+
+https://github.com/eventuate-examples/eventuate-examples-java-customers-and-orders
+
