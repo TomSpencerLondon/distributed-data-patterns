@@ -61,3 +61,4 @@ can take a long time. We are now going to talk about the individual services. Tr
 Presentation, Business Logic and Persistence are not only single. We can use hexagonal architecture to describe the individual microservice
 architectures. 
 
+![image](https://user-images.githubusercontent.com/27693622/231159986-c74647e8-ea1c-4abd-a756-585040524490.png)
