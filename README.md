@@ -44,5 +44,4 @@ The microservice architecture is an architectural style that structures an appli
 Top tip: Start with one service per team and only split service if it solves a problem. Monzo, for instance, has ten services per developer
 which is excessive.
 
-
-![image](https://user-images.githubusercontent.com/27693622/231152521-dc0dc50d-3161-4368-9601-96bafa01c8d9.png)
+![image](https://user-images.githubusercontent.com/27693622/231153787-7274b0bb-015c-41d6-bde8-522d58a0a65b.png)
