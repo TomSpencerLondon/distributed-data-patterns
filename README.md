@@ -14,3 +14,15 @@ The application is used in hands-on labs that are part of a [microservices servi
 Standard architecture is monolithic architecture:
 ![image](https://user-images.githubusercontent.com/27693622/231139288-68a26bc6-fe05-4ca4-ba8e-67af8518549f.png)
 
+The monolithic pattern is not necessarily an antipattern it can fulfil:
+- testability
+- deployability
+- maintainability
+- modularity
+- evolvability
+
+The problem is that successful applications can grow. The application can grow and the rate of change increases.
+All teams would contribute to the large code base. The application no longer fits in developers heads but can
+become a big ball of mud. The technology stack can become obsolete but rewrites are not feasible.
+
+![image](https://user-images.githubusercontent.com/27693622/231145812-5bd1f8b5-25a8-4358-8489-460a18fd3370.png)
