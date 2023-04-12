@@ -1074,4 +1074,142 @@ The semantic lock could be a boolean or additional state in the state machine.
 #### Commutative Update - countermeasure
 Design commands to be commutative - addition and subtraction are commutative.
 
+#### Pessimistic View - countermeasure
+Only do release funds after the possible cancel order and cancel delivery steps.
 
+#### Re-read value - countermeasure
+Verify the data is unchanged. If the data is changed abort the saga.
+
+#### By value - countermeasure
+Dynamically selects countermeasures based on business risk.
+
+
+### Querying in Microservice Architecture
+If a query spans services we need to use the API Composition or CQRS patterns to implement the queries.
+Sometimes we might have a query that spans two services:
+
+![image](https://user-images.githubusercontent.com/27693622/231514776-2f92467a-70fd-45da-aeb6-cb7ac79d94d9.png)
+
+Queries that retrieve data from single services are straightforward. Queries that span services in microservices are
+always challenging. Data for Customer and Order are private to their respective services. This is important because
+otherwise the services could suffer from design time coupling. The two patterns to help with this issue are API composition
+and CQRS:
+https://microservices.io/patterns/index.html#data-management
+
+API composition is the simplest, the more powerful pattern is CQRS.
+
+This is API composition:
+![image](https://user-images.githubusercontent.com/27693622/231240010-21fba972-3daf-467d-9829-4bfc94ea12c3.png)
+
+It is simple but can be inefficient involving too many round trips on the network.
+
+This is CQRS:
+![image](https://user-images.githubusercontent.com/27693622/231243611-7cc5b72b-b129-480d-993b-e80994d8b8cd.png)
+
+CQRS is more flexible but more complex and eventually consistent. In CQRS we define a view database, which is a read-only replica that 
+is designed to support that query. The application keeps the replica up to date by subscribing to Domain events published 
+by the service that own the data.
+https://microservices.io/patterns/data/cqrs.html
+
+
+#### API composition Pattern: Order Service
+
+![image](https://user-images.githubusercontent.com/27693622/231524045-498641ac-f1e0-4e0a-80e1-d3129bed5b7c.png)
+
+The API Gateway here plays the role of Composer and the services are providers. In a variation on the pattern the API gateway might
+route a request to the Order Service and the Order Service would then play the role of composer for all the provider queries
+to each service. This is useful when the API gateway is unchangeable.
+
+API composition provides read your own writes consistency but does not provide ACID consistency across transactions. The simplest
+approach of API composition is to execute the queries in sequence but it would be faster to query each service asynchronously so that
+only the slowest query affects the time of the request. Reactive programming can be used for transforming outcomes in a non-blocking 
+asynchronous manner. For example: Java Completable Future, RxJava Observable, Spring 5 Mono and Flux...
+This is the flow diagram for asynchronous reactive http requests:
+![image](https://user-images.githubusercontent.com/27693622/231534930-3e9df230-3ca0-49f9-8525-5bfc6f02909a.png)
+
+This is the code:
+
+```java
+@Service
+public class OrderServiceProxy {
+    
+    private OrderDestinations orderDestinations;
+    private WebClient client;
+    
+    public OrderServiceProxy(OrderDestinations orderDestinations, WebClient webClient) {
+        //..
+    }
+    
+    public Mono<OrderInfo> findOrderById(String orderId) {
+        Mono<ClientResponse> response = client
+                .get()
+                .uri(orderDestinations.getOrderServiceUrl() + "/orders/{orderId}", orderId)
+                .exchange();
+        
+        return response.flatMap(resp -> {
+           switch (resp.statusCode()) {
+             case OK:
+                 return resp.bodyToMono(OrderInfo.class);
+             case NOT_FOUND:
+                 return Mono.error(new OrderNotFoundException());
+             default:
+                 return Mono.error(new RuntimeException("Unkown" + resp.statusCode()));
+           }
+        });
+    }
+}
+```
+
+In the above code we call the get method on the client and then transform the mono into either success or not found exception.
+FlatMap returns a second mono which is then updated when the client responds.
+
+![image](https://user-images.githubusercontent.com/27693622/231537204-7a0480dc-197e-4346-8e13-68f4152ac399.png)
+
+Here is a more complex example of Mono-based code:
+
+```java
+
+import java.util.Optional;
+
+public class OrderHandlers {
+  public OrderHandlers(OrderServiceProxy orderServiceProxy,
+                       RestaurantOrderService restaurantOrderService,
+                       DeliveryService deliveryService,
+                       AccountingService accountingService) {
+    //...
+  }
+
+
+  public Mono<ServerResponse> getOrderDetails(ServerRequest serverRequest) {
+    String orderId = serverRequest.pathVariable("orderId");
+    Mono<OrderInfo> orderInfo = orderService.findOrderById(orderId);
+    Mono<Optional<RestaurantInfo>> restaurantOrderInfo = restaurantOrderService
+            .findRestaurantOrderByOrderId(orderId)
+            .map(Optional::of)
+            .onErrorReturn(Optional.empty());
+
+    Mono<Optional<BillInfo>> billInfo = accountingService
+            .findBillByOrderId(orderId)
+            .map(Optional::of)
+            .onErrorReturn(Optional.empty());
+    
+    Mono<Tuple4<OrderInfo, Optional<RestaurantOrderInfo>, Optional<DeliveryInfo>, Optional<BillInfo>>> combined =
+            Mono.when(orderInfo, restaurantOrderInfo, deliveryInfo, billInfo);
+    
+    Mono<OrderDetails> orderDetails = combined.map(OrderDetails::makeOrderDetails);
+    
+    return orderDetails.flatMap(od -> ServerResponse.ok()
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(fromObject(od)));
+  }
+}
+```
+
+In the above code we invvoke four services and then combine the four monos into a single mono and then combine the mono result
+into a single response.
+
+![image](https://user-images.githubusercontent.com/27693622/231539937-77d096c6-25f2-4c03-a5bb-667dc8276c99.png)
+
+The API composer invokes the provider synchronously so there can be lower availability and higher response times.
+The Composer should use Timeouts, Retries, Circuit Breaker and use a fallback mechanism for each optional provider:
+empty, default or cached data.
