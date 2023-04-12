@@ -1019,3 +1019,59 @@ Useful docker command:
 kill all running containers with docker kill $(docker ps -q)
 delete all stopped containers with docker rm $(docker ps -a -q)
 ```
+
+### Saga Counter Measures
+ACID = Atomicity Consistency Isolation and Durability
+We want to be able to implement Isolation with our sagas.
+At the moment the Create Order Saga is quite simple:
+
+|           | Participant      | Participant     | Participant   |
+|-----------|------------------|-----------------|---------------|
+| 1         | Order Service    | createOrder()   | rejectOrder() |
+| 2 (pivot) | Customer Service | reserveCredit() | -             |
+
+It doesn't have a third approve order step. In real applications we need to be able to cancel orders.
+This is a cancel order saga with two steps:
+
+|           | Participant      | Participant     | Participant |
+|-----------|------------------|-----------------|-------------|
+| 1 (pivot) | Order Service    | cancelOrder()   | -           |
+| 2         | Customer Service | reserveCredit() | -           |
+
+The sagas are interleaved which can make the inconsistent. This means that we could possibly release credit that wasn't reserved.
+Sagas are ACD:
+- Atomicity
+  - saga implementation ensures that all transactions are executed OR all are compensated
+- Consistency
+  - Referential integrity within a service handled by local databases
+  - referential integrity across services handled by application
+- ~~Isolation~~
+  - ~~Concurrent execution of multiple transactions is equivalent to a sequential execution~~
+- Durability
+  - Durability handled by local databases
+
+Sagas are Atomic, Consistent and Durable but lack Isolation:
+- Isolation guarantees the outcome of executing multiple transactions concurrently is equivalent to a sequential execution
+- For example: outcome of concurrent execution of Txn A and Txn B is either
+  - Txn A => Txn B
+  - Txn B => Txn A
+- Classic implementation uses locks
+- Modern databases avoid locking by using multiversion concurrency control
+
+Lack of isolation => outcome of concurrent execution != a sequential execution = Data anomolies
+
+### Data Anomolies
+1. Lost update
+2. Dirty read - one transactoin reads the updates of another
+3. Fuzzy read / non repeatable read - two steps read different data which has changed in the interim
+
+We should use counter measures to reduce the impace of anomolies.
+
+#### Semantic Lock - countermeasure
+We saw this in Order Service createOrder() PENDING which locks the order, approveOrder() APPROVED, rejectedOrder() REJECTED - release the lock.
+The semantic lock could be a boolean or additional state in the state machine.
+
+#### Commutative Update - countermeasure
+Design commands to be commutative - addition and subtraction are commutative.
+
+
