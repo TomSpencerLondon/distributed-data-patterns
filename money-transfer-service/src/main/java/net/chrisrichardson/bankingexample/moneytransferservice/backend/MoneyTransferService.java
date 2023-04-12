@@ -31,7 +31,9 @@ public class MoneyTransferService {
   }
 
   private TransferMoneySagaData createTransferMoneySaga(MoneyTransferInfo moneyTransferInfo) {
-    throw new RuntimeException("not yet implemented");
+    TransferMoneySagaData data = new TransferMoneySagaData(moneyTransferInfo);
+    sagaInstanceFactory.create(transferMoneySaga, data);
+    return data;
   }
 
   public Optional<MoneyTransfer> findMoneyTransfer(long id) {
