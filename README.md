@@ -968,3 +968,54 @@ So that I can manage my finances
 ```
 There are two parts to this task:
 1. Complete orchestration-based saga in Money Transfer Service in:
+2. Enhance the Account Service to subscribe to commands sent by the Money Transfer Service to credit or debit the appropriate account
+
+This is the sequence diagram for the Money Transfer Service Saga:
+
+```mermaid
+---
+title: "Saga Orchestration: Money Transfer Service"
+---
+
+sequenceDiagram
+    autonumber
+    participant MoneyTransferService
+    participant TransferMoneySaga
+    participant MoneyTransferServiceCommandHandlers
+    participant AccountCommandHandlers
+    participant AccountService
+    
+    MoneyTransferService--> TransferMoneySaga: createTransferMoneySaga()
+    TransferMoneySaga->> TransferMoneySaga: complete(TransferMoneySagaData)
+    MoneyTransferService --> AccountCommandHandlers: credit(CommandMessage)
+    AccountCommandHandlers--> AccountService: credit()
+    AccountCommandHandlers --> MoneyTransferService: SUCCESS
+```
+
+![image](https://user-images.githubusercontent.com/27693622/231465051-0fc8fc72-6391-45ae-a874-733f42efde8c.png)
+
+![image](https://user-images.githubusercontent.com/27693622/231469191-56907185-3659-4b81-aaac-b72995ada8a6.png)
+
+![image](https://user-images.githubusercontent.com/27693622/231469684-1e639f5e-c989-4300-b92e-d5bbfc684e8f.png)
+
+
+At the moment the transfers are still in progress:
+```mysql
+mysql> select * from transfers;
++----+--------+-----------------+---------------+-------------+
+| id | amount | from_account_id | to_account_id | state       |
++----+--------+-----------------+---------------+-------------+
+|  3 |    600 |               1 |             2 | IN_PROGRESS |
+|  7 |    600 |               5 |             6 | IN_PROGRESS |
++----+--------+-----------------+---------------+-------------+
+2 rows in set (0.00 sec)
+
+```
+
+We still need to save the changes in the accounts.
+
+Useful docker command:
+```text
+kill all running containers with docker kill $(docker ps -q)
+delete all stopped containers with docker rm $(docker ps -a -q)
+```

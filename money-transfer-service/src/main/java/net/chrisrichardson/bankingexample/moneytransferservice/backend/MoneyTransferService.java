@@ -39,12 +39,4 @@ public class MoneyTransferService {
   public Optional<MoneyTransfer> findMoneyTransfer(long id) {
     return moneyTransferRepository.findById(id);
   }
-
-  public void completeTransfer(long moneyTransferId) {
-    moneyTransferRepository.findById(moneyTransferId).get().complete();
-  }
-
-  public void cancelTransfer(long moneyTransferId) {
-    moneyTransferRepository.findById(moneyTransferId).get().cancel();
-  }
 }

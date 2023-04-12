@@ -62,8 +62,8 @@ public class AccountService {
   public void debit(long accountId, Money amount) {
     Account account = accountRepository.findById(accountId).get();
     account.debit(amount);
+    accountRepository.save(account);
     publishAccountDebitedEvent(amount, account);
-
   }
 
   private void publishAccountDebitedEvent(Money amount, Account account) {
@@ -73,6 +73,7 @@ public class AccountService {
   public void credit(long accountId, Money amount) {
     Account account = accountRepository.findById(accountId).get();
     account.credit(amount);
+    accountRepository.save(account);
     publishAccountCreditedEvent(amount, account);
   }
 
