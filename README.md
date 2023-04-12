@@ -297,4 +297,3 @@ The orderCreatedEventHandler attempts to reserve credit and if successful it pub
 it publishes a CustomerCreditReservationFailedEvent.
 
 
-
