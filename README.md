@@ -297,3 +297,665 @@ The orderCreatedEventHandler attempts to reserve credit and if successful it pub
 it publishes a CustomerCreditReservationFailedEvent.
 
 
+### Using Choreography based sagas
+
+#### Implement choreography-based saga in Account Service
+Here I describe how I implemented the Account Service's choreography-based saga in order to validate the newly
+created account's customerId.
+
+#### Overview of the saga
+
+```mermaid
+---
+title: Saga Choreography
+---
+
+sequenceDiagram
+    autonumber
+    participant Account Service
+    participant Customer Service
+    
+    Account Service->> Account Service: createAccount() PENDING_CUSTOMER_VALIDATION
+    Account Service -->> Customer Service: AccountOpenedEvent
+    Customer Service->> Customer Service: validateCustomerId(AccountOpenedEvent)
+    
+    alt invalid input
+        Customer Service-->>Account Service: CustomerValidationFailedEvent
+        Account Service->> Account Service: CUSTOMER_VALIDATION_FAILED
+    else valid input
+        Customer Service-->>Account Service: CustomerValidatedEvent
+        Account Service->> Account Service: Account OPEN
+        Note left of Customer Service: Depends on valid customerId
+    end
+```
+
+The above sequence diagram describes the saga:
+1. Account Service creates an Account in the PENDING_CUSTOMER_VALIDATION state
+2. Account Service publishes an AccountOpenedEvent
+3. Customer Service consumes the AccountOpenedEvent and validates the customerId
+4. Invalid: Customer Service publishes CustomerValidationFailedEvent
+5. Invalid: Account Service changes state of Account to CUSTOMER_VALIDATION_FAILED
+6. Valid: Customer Service publishes CustomerValidatedEvent
+7. Valid: Account Service changes state of Account to OPEN
+
+This is the code for the AccountService:
+```java
+@Service
+@Transactional
+public class AccountService {
+    private Logger logger = LoggerFactory.getLogger(getClass());
+
+    private AccountRepository accountRepository;
+    private DomainEventPublisher domainEventPublisher;
+
+    public AccountService(AccountRepository accountRepository, DomainEventPublisher domainEventPublisher) {
+        this.accountRepository = accountRepository;
+        this.domainEventPublisher = domainEventPublisher;
+    }
+
+
+    public Account openAccount(AccountInfo accountInfo) {
+        logger.info("AccountService is opening account = {}", accountInfo);
+        Account account = new Account(accountInfo);
+        accountRepository.save(account);
+        logger.info("AccountService created and saved account = {}", account);
+        publishAccountOpenedEvent(account);
+        logger.info("AccountService published AccountOpenedEvent for account = {}", account);
+        return account;
+    }
+
+    private void publishAccountOpenedEvent(Account account) {
+        domainEventPublisher.publish(Account.class,
+                account.getId(),
+                Collections.singletonList(new AccountOpenedEvent(account.getAccountInfo())));
+    }
+
+}
+```
+I added the code within publishAccountOpenedEvent(Account account). This publishes the AccountOpenedEvent.
+
+The test for the AccountService includes a mock for the accountRepository and verifies that the domainEventPublisher was
+called:
+```java
+
+public class AccountServiceTest {
+
+
+  private AccountService accountService;
+  private AccountRepository accountRepository;
+  private DomainEventPublisher domainEventPublisher;
+
+  @Before
+  public void setUp() {
+    accountRepository = mock(AccountRepository.class);
+    domainEventPublisher = mock(DomainEventPublisher.class);
+
+    accountService = new AccountService(accountRepository, domainEventPublisher);
+  }
+
+  @Test
+  public void shouldOpenAccount() {
+
+    when(accountRepository.save(any(Account.class))).then(invocation -> {
+      ((Account) invocation.getArguments()[0]).setId(accountId);
+      return null;
+    });
+
+    AccountInfo accountInfo = new AccountInfo(customerId, "Checking", initialBalance);
+    Account account = accountService.openAccount(accountInfo);
+
+    verify(accountRepository).save(account);
+
+    verify(domainEventPublisher).publish(Account.class, accountId, Collections.singletonList(new AccountOpenedEvent(accountInfo)));
+  }
+}
+```
+
+There is also an AccountServiceIntegrationtest to verify that the service can connect to the database and message broker:
+```java
+@RunWith(SpringJUnit4ClassRunner.class)
+@SpringBootTest(classes = AccountServiceIntegrationTest.Config.class, webEnvironment = SpringBootTest.WebEnvironment.NONE)
+public class AccountServiceIntegrationTest {
+
+
+  @Autowired
+  private AccountService accountService;
+
+  @Test
+  public void shouldSaveAndLoadAccount() {
+
+    AccountInfo accountInfo = AccountMother.makeAccount();
+
+    // Account savedAccount = accountService.openAccount(accountInfo);
+    Account savedAccount = accountService.openAccount(accountInfo);
+
+    //    Account loadedAccount = accountService.findAccount(savedAccount.getId());
+    Optional<Account> loadedAccount = accountService.findAccount(savedAccount.getId());
+
+    assertTrue(loadedAccount.isPresent());
+
+    assertEquals(accountInfo, loadedAccount.get().getAccountInfo());
+  }
+
+  @Configuration
+  @Import({AccountBackendConfiguration.class,
+          TramInMemoryConfiguration.class, EventuateTransactionTemplateConfiguration.class
+  })
+  @EnableAutoConfiguration
+  public static class Config {
+
+  }
+}
+```
+
+Next I added an event handler for the CustomerValidatedEvent. Specifically, I implemented the handleCustomerValidatedEvent()
+method in the AccountEventHandlers class and made it call accountService.noteCustomerValidated():
+
+```java
+
+public class AccountEventHandlers {
+  private Logger logger = LoggerFactory.getLogger(getClass());
+
+  private AccountService accountService;
+
+  public AccountEventHandlers(AccountService accountService) {
+    this.accountService = accountService;
+  }
+
+  public DomainEventHandlers domainEventHandlers() {
+    return DomainEventHandlersBuilder
+            .forAggregateType("net.chrisrichardson.bankingexample.customerservice.backend.Customer")
+            .onEvent(CustomerValidatedEvent.class, this::handleCustomerValidatedEvent)
+            .onEvent(CustomerValidationFailedEvent.class, this::handleCustomerValidationFailedEvent)
+            .build();
+  }
+
+  private void handleCustomerValidatedEvent(DomainEventEnvelope<CustomerValidatedEvent> dee) {
+    accountService.noteCustomerValidated(dee.getEvent().getAccountId());
+  }
+  private void handleCustomerValidationFailedEvent(DomainEventEnvelope<CustomerValidationFailedEvent> dee) {
+    accountService.noteCustomerValidationFailed(dee.getEvent().getAccountId());
+  }
+}
+
+```
+
+We confirm that the class is working by running the AccountEventHandlersTest:
+```java
+public class AccountEventHandlersTest {
+
+  private AccountEventHandlers accountEventHandlers;
+  private AccountService accountService;
+
+  @Before
+  public void setUp() {
+    accountService = mock(AccountService.class);
+    accountEventHandlers = new AccountEventHandlers(accountService);
+  }
+
+  @Test
+  public void shouldHandleCustomerValidatedEvent() {
+    given().
+      eventHandlers(accountEventHandlers.domainEventHandlers()).
+    when().
+      aggregate("net.chrisrichardson.bankingexample.customerservice.backend.Customer", customerId).
+      publishes(new CustomerValidatedEvent(accountId)).
+    then().
+      verify(() -> {
+        verify(accountService).noteCustomerValidated(accountId);
+      })
+    ;
+
+  }
+  @Test
+  public void shouldHandleCustomerValidationFailedEvent() {
+    given().
+      eventHandlers(accountEventHandlers.domainEventHandlers()).
+    when().
+      aggregate("net.chrisrichardson.bankingexample.customerservice.backend.Customer", customerId).
+      publishes(new CustomerValidationFailedEvent(accountId)).
+    then().
+      verify(() -> {
+        verify(accountService).noteCustomerValidationFailed(accountId);
+      })
+    ;
+
+  }
+
+}
+```
+Here, we noteCustomerValidated() or noteCustomerValidationFAiled() depending on the event received.
+
+We then run the end-to-end tests with:
+```bash
+./gradlew endToEndTests
+```
+
+This shows that the shouldCreateAccounts test and the shouldCreateCustomer tests pass:
+![image](https://user-images.githubusercontent.com/27693622/231401395-9c01ac77-84ba-4987-bef6-276d3c384ff7.png)
+
+Other failing tests relate to returnAccountWithCustomer, shouldTransferMoney and shouldUpdateCustomerView.
+These are unimplemented.
+
+#### Manual Testing
+We then use Swagger UI to create customers and accounts:
+```bash
+./gradlew buildAndStartServicesMySql
+```
+
+![image](https://user-images.githubusercontent.com/27693622/231408552-441d7514-d533-4f11-8aec-79728b7e6369.png)
+
+It returns a 200 response:
+![image](https://user-images.githubusercontent.com/27693622/231408751-d19cb380-b3a9-429d-b9e1-d47d0dee3ef9.png)
+
+I can also find the customer:
+![image](https://user-images.githubusercontent.com/27693622/231409160-bcf69e6a-aebe-4460-bcb6-d9b67b5c9d52.png)
+
+I then connect to the database and can see the updated tables and the events:
+
+```mysql
+mysql> show tables;
++----------------------------+
+| Tables_in_eventuate        |
++----------------------------+
+| accounts                   |
+| cdc_monitoring             |
+| customers                  |
+| entities                   |
+| events                     |
+| hibernate_sequence         |
+| message                    |
+| offset_store               |
+| received_messages          |
+| saga_instance              |
+| saga_instance_participants |
+| saga_lock_table            |
+| saga_stash_table           |
+| snapshots                  |
+| transfers                  |
++----------------------------+
+15 rows in set (0.00 sec)
+
+mysql> select * from customers;
++----+---------+----------------+---------------+----------+----------+------------+-----------+--------------+------------+
+| id | city    | state          | street1       | street2  | zip_code | first_name | last_name | phone_number | ssn        |
++----+---------+----------------+---------------+----------+----------+------------+-----------+--------------+------------+
+|  1 | Oakland | CA             | 1 high street | NULL     | 94719    | John       | Doe       | 510-555-1212 | xxx-yy-zzz |
+|  4 | Oakland | CA             | 1 high street | NULL     | 94719    | John       | Doe       | 510-555-1212 | xxx-yy-zzz |
+|  7 | Oakland | CA             | 1 high street | NULL     | 94719    | John       | Doe       | 510-555-1212 | xxx-yy-zzz |
+|  8 | Oakland | CA             | 1 high street | NULL     | 94719    | John       | Doe       | 510-555-1212 | xxx-yy-zzz |
+| 11 | Oakland | CA             | 1 high street | NULL     | 94719    | John       | Doe       | 510-555-1212 | xxx-yy-zzz |
+| 14 | London  | United Kingdom | Street 1      | Street 2 | SW24 3DQ | Tom        | Spencer   | 07954343212  | 4321123    |
++----+---------+----------------+---------------+----------+----------+------------+-----------+--------------+------------+
+6 rows in set (0.00 sec)
+
+mysql> select * from accounts;
++----+--------+-------------+----------+-------+
+| id | amount | customer_id | name     | state |
++----+--------+-------------+----------+-------+
+|  2 |   1234 |           1 | checking | OPEN  |
+|  3 |  10086 |           1 | saving   | OPEN  |
+|  5 |   1234 |           4 | checking | OPEN  |
+|  6 |  10086 |           4 | saving   | OPEN  |
+|  9 |   1234 |           8 | checking | OPEN  |
+| 10 |  10086 |           8 | saving   | OPEN  |
+| 12 |   1234 |          11 | checking | OPEN  |
+| 13 |  10086 |          11 | saving   | OPEN  |
++----+--------+-------------+----------+-------+
+8 rows in set (0.00 sec)
+
+mysql> select * from message\G
+*************************** 1. row ***************************
+           id: 000001877498d085-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"1","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:04 GMT","b3":"94c5879a28d2da37-144eb4ff36828a1e-1","event-aggregate-id":"1","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerCreatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498d085-0242ac12000b0000"}
+      payload: {"customerInfo":{"name":{"firstName":"John","lastName":"Doe"},"phoneNumber":"510-555-1212","address":{"street1":"1 high street","city":"Oakland","state":"CA","zipCode":"94719"},"ssn":"xxx-yy-zzz"}}
+    published: 0
+creation_time: 1681288384660
+*************************** 2. row ***************************
+           id: 000001877498d36e-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"2","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:05 GMT","b3":"ccdb007493e7d9a1-4ab6ce1a5db2c6b5-1","event-aggregate-id":"2","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498d36e-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":1,"name":"checking","balance":{"amount":1234}}}
+    published: 0
+creation_time: 1681288385429
+*************************** 3. row ***************************
+           id: 000001877498d554-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"1","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:05 GMT","b3":"ccdb007493e7d9a1-1f3b6f8068dc9bb8-1","event-aggregate-id":"1","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498d554-0242ac12000b0000"}
+      payload: {"accountId":2}
+    published: 0
+creation_time: 1681288385878
+*************************** 4. row ***************************
+           id: 000001877498d78f-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"3","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:06 GMT","b3":"1164f685d183ff64-ebfce8f00d1a8385-1","event-aggregate-id":"3","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498d78f-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":1,"name":"saving","balance":{"amount":10086}}}
+    published: 0
+creation_time: 1681288386448
+*************************** 5. row ***************************
+           id: 000001877498d7c8-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"1","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:06 GMT","b3":"1164f685d183ff64-6c96ba9960c1c7f1-1","event-aggregate-id":"1","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498d7c8-0242ac12000b0000"}
+      payload: {"accountId":3}
+    published: 0
+creation_time: 1681288386505
+*************************** 6. row ***************************
+           id: 000001877498da5e-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"4","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:07 GMT","b3":"4e454678789486e7-2910836d46d9578d-1","event-aggregate-id":"4","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerCreatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498da5e-0242ac12000b0000"}
+      payload: {"customerInfo":{"name":{"firstName":"John","lastName":"Doe"},"phoneNumber":"510-555-1212","address":{"street1":"1 high street","city":"Oakland","state":"CA","zipCode":"94719"},"ssn":"xxx-yy-zzz"}}
+    published: 0
+creation_time: 1681288387168
+*************************** 7. row ***************************
+           id: 000001877498db04-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"5","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:07 GMT","b3":"7df136e991e46e4d-843fe138fc3e2583-1","event-aggregate-id":"5","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498db04-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":4,"name":"checking","balance":{"amount":1234}}}
+    published: 0
+creation_time: 1681288387336
+*************************** 8. row ***************************
+           id: 000001877498db7d-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"4","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:07 GMT","b3":"7df136e991e46e4d-ccfbca817234b3c7-1","event-aggregate-id":"4","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498db7d-0242ac12000b0000"}
+      payload: {"accountId":5}
+    published: 0
+creation_time: 1681288387456
+*************************** 9. row ***************************
+           id: 000001877498de0f-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"6","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:08 GMT","b3":"c01f8e7c16410194-9ba14c49096c8e33-1","event-aggregate-id":"6","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498de0f-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":4,"name":"saving","balance":{"amount":10086}}}
+    published: 0
+creation_time: 1681288388114
+*************************** 10. row ***************************
+           id: 000001877498de48-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"4","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:08 GMT","b3":"c01f8e7c16410194-04ad98d28fc39f25-1","event-aggregate-id":"4","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498de48-0242ac12000b0000"}
+      payload: {"accountId":6}
+    published: 0
+creation_time: 1681288388187
+*************************** 11. row ***************************
+           id: 000001877498e158-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"7","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:08 GMT","b3":"a729d6bd86c46e5e-540afe75ba036daf-1","event-aggregate-id":"7","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerCreatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498e158-0242ac12000b0000"}
+      payload: {"customerInfo":{"name":{"firstName":"John","lastName":"Doe"},"phoneNumber":"510-555-1212","address":{"street1":"1 high street","city":"Oakland","state":"CA","zipCode":"94719"},"ssn":"xxx-yy-zzz"}}
+    published: 0
+creation_time: 1681288388954
+*************************** 12. row ***************************
+           id: 000001877498e1a4-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"8","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:09 GMT","b3":"1305cc7b40873c29-7f0858194ec36939-1","event-aggregate-id":"8","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerCreatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498e1a4-0242ac12000b0000"}
+      payload: {"customerInfo":{"name":{"firstName":"John","lastName":"Doe"},"phoneNumber":"510-555-1212","address":{"street1":"1 high street","city":"Oakland","state":"CA","zipCode":"94719"},"ssn":"xxx-yy-zzz"}}
+    published: 0
+creation_time: 1681288389030
+*************************** 13. row ***************************
+           id: 000001877498e1f2-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"9","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:09 GMT","b3":"dc1c96fac85dacea-fed5410627b154d0-1","event-aggregate-id":"9","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498e1f2-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":8,"name":"checking","balance":{"amount":1234}}}
+    published: 0
+creation_time: 1681288389107
+*************************** 14. row ***************************
+           id: 000001877498e224-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"8","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:09 GMT","b3":"dc1c96fac85dacea-d61acf5d269bb0d3-1","event-aggregate-id":"8","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498e224-0242ac12000b0000"}
+      payload: {"accountId":9}
+    published: 0
+creation_time: 1681288389163
+*************************** 15. row ***************************
+           id: 000001877498e4b6-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"10","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:09 GMT","b3":"02d3f753d1cea9e5-b411c48afe5da324-1","event-aggregate-id":"10","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498e4b6-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":8,"name":"saving","balance":{"amount":10086}}}
+    published: 0
+creation_time: 1681288389817
+*************************** 16. row ***************************
+           id: 000001877498e4ff-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"8","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:09 GMT","b3":"02d3f753d1cea9e5-413c3bb5b16b0288-1","event-aggregate-id":"8","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498e4ff-0242ac12000b0000"}
+      payload: {"accountId":10}
+    published: 0
+creation_time: 1681288389888
+*************************** 17. row ***************************
+           id: 000001877498e7c3-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"11","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:10 GMT","b3":"ed32284c14185d90-bbc6927b9e4d576f-1","event-aggregate-id":"11","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerCreatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498e7c3-0242ac12000b0000"}
+      payload: {"customerInfo":{"name":{"firstName":"John","lastName":"Doe"},"phoneNumber":"510-555-1212","address":{"street1":"1 high street","city":"Oakland","state":"CA","zipCode":"94719"},"ssn":"xxx-yy-zzz"}}
+    published: 0
+creation_time: 1681288390597
+*************************** 18. row ***************************
+           id: 000001877498e7fe-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"12","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:10 GMT","b3":"5cce2eee5eec6f94-d1d7fc72fb476d49-1","event-aggregate-id":"12","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498e7fe-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":11,"name":"checking","balance":{"amount":1234}}}
+    published: 0
+creation_time: 1681288390656
+*************************** 19. row ***************************
+           id: 000001877498e82c-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"11","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:10 GMT","b3":"5cce2eee5eec6f94-bb98ef39c24b4443-1","event-aggregate-id":"11","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498e82c-0242ac12000b0000"}
+      payload: {"accountId":12}
+    published: 0
+creation_time: 1681288390702
+*************************** 20. row ***************************
+           id: 000001877498ea74-0242ac12000c0000
+  destination: net.chrisrichardson.bankingexample.accountservice.backend.Account
+      headers: {"PARTITION_ID":"13","event-aggregate-type":"net.chrisrichardson.bankingexample.accountservice.backend.Account","DATE":"Wed, 12 Apr 2023 08:33:11 GMT","b3":"db6bb80071ea11b1-19a35c3f8d930da5-1","event-aggregate-id":"13","event-type":"net.chrisrichardson.bankingexample.accountservice.common.events.AccountOpenedEvent","DESTINATION":"net.chrisrichardson.bankingexample.accountservice.backend.Account","ID":"000001877498ea74-0242ac12000c0000"}
+      payload: {"accountInfo":{"customerId":11,"name":"saving","balance":{"amount":10086}}}
+    published: 0
+creation_time: 1681288391286
+*************************** 21. row ***************************
+           id: 000001877498eaaa-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"11","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 08:33:11 GMT","b3":"db6bb80071ea11b1-48512a7de7b66fd2-1","event-aggregate-id":"11","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerValidatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"000001877498eaaa-0242ac12000b0000"}
+      payload: {"accountId":13}
+    published: 0
+creation_time: 1681288391341
+*************************** 22. row ***************************
+           id: 0000018774b4f259-0242ac12000b0000
+  destination: net.chrisrichardson.bankingexample.customerservice.backend.Customer
+      headers: {"PARTITION_ID":"14","event-aggregate-type":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","DATE":"Wed, 12 Apr 2023 09:03:48 GMT","b3":"ba5e608aa172fc64-b3dc9bfe7a4edad9-1","event-aggregate-id":"14","event-type":"net.chrisrichardson.bankingexample.customerservice.common.CustomerCreatedEvent","DESTINATION":"net.chrisrichardson.bankingexample.customerservice.backend.Customer","ID":"0000018774b4f259-0242ac12000b0000"}
+      payload: {"customerInfo":{"name":{"firstName":"Tom","lastName":"Spencer"},"phoneNumber":"07954343212","address":{"street1":"Street 1","street2":"Street 2","city":"London","state":"United Kingdom","zipCode":"SW24 3DQ"},"ssn":"4321123"}}
+    published: 0
+creation_time: 1681290228315
+22 rows in set (0.00 sec)
+```
+
+To clean up I run:
+```bash
+./gradlew stopServicesMySql
+```
+
+### Orchestration Based Sagas
+- Introduction to orchestration-based sagas
+- Code walkthrough
+- Message and API design
+
+#### Orchestration-based coordination using command Messages
+![image](https://user-images.githubusercontent.com/27693622/231420883-0a9104e7-5216-4623-8bd0-e8f7393a929c.png)
+
+Here the orchestrator tells the participants what to do. The orchestrator invokes the participants using
+asynchronous request-response.
+
+![image](https://user-images.githubusercontent.com/27693622/231423651-e9b6d9f8-d6a7-46b3-8817-8ffc2184c8fb.png)
+
+The orchestrator sends a command and the Customer Service then replies to the Command via the point-to-point reply channel.
+The saga (orchestrator) is a persistent object that implements a state machine and invokes the participants.
+It sends command messages to saga participants and when a reply comes back this triggers a state transition which then
+sends a message to the next particpant.
+
+#### Saga orchestrator behaviour
+- on create:
+  - invokes a saga participant
+  - persists state in the database
+  - waits for a reply
+- On reply:
+  - load state from database
+  - determine which saga participant to invoke next
+  - invokes saga participant
+  - updates its state
+  - persists updated state
+  - waits for a reply
+  - ...
+
+![image](https://user-images.githubusercontent.com/27693622/231429442-be75fa57-f291-479d-a300-26d0aa317c7f.png)
+
+#### Benefits and drawbacks of orchestration
+- Benefits:
+  - Centralized coordination logic is easier to understand
+  - saga state is queryable
+  - reduced coupling, e.g. Customer Service knows less. Simply has
+API for managing available credit
+  - Reduces cyclic dependencies
+- Drawbacks:
+  - Risk of smart sagas directing dumb services
+  - More complex implementation that requires a framework
+
+We can now look at the code that implements the CreateOrderSaga:
+
+```java
+public class LocalCreateOrderSaga implements SimpleSaga<LocalCreateOrderSaga> {
+    private DomainEventPublisher domainEventPublisher;
+    private OrderRepository orderRepository;
+    
+    public LocalCreateOrderSaga(DomainEventPublisher domainEventPublisher,
+                                OrderRepository orderRepository) {
+        this.domainEventPublisher = domainEventPublisher;
+        this.orderRepository = orderRepository;
+    }
+    
+    private SagaDefinition<LocalCreateOrderSaga> sagaDefinition =
+            step()
+                    .invokeLocal(this::create)
+                    .withcompensation(this::reject)
+                    .step()
+                    .invokeParticipant(this::reserveCredit)
+                    .step()
+                    .invokeLocal(this::approve)
+                    .build();
+}
+```
+Here the saga consists of three steps, each step has a transaction and a rollback on the transaction.
+This is the rest of the class:
+```java
+
+public class LocalCreateOrderSaga implements SimpleSaga<LocalCreateOrderSaga> {
+    private SagaDefinition<LocalCreateOrderSaga> sagaDefinition =
+            step()
+                    .invokeLocal(this::create)
+                    .withCompensation(this::reject)
+            .step()
+                    .invokeParticipant(this::reserveCredit)
+            .step()
+                    .invokeLocal(this::approve)
+            .build();
+    
+    private void create(LocalCreateOrderSaga data) {
+        ResultWithEvents<Order> oe = Order.createOrder(data.getOrderDetails());
+        Order order = oe.result();
+        orderRepository.save(order);
+        data.setOrderId(order.getId());
+    }
+    
+    private CommandWithDestination reserveCredit(LocalCreateOrderSaga data) {
+        long orderId = data.getOrderId();
+        Long customerId = data.getOrderDetails().getCustomerId();
+        Money orderTotal = data.getOrderDetails().getOrderTotal();
+        return send(new ReserveCreditCommand(customerId, orderId, orderTotal))
+                .to("customerService")
+                .build();
+    }
+} 
+```
+The above code executes the save for the order and then builds a command to send.
+This is the Command Handler in the Customer Service:
+
+```java
+public class CustomerCommandHandler {
+    @Autowired
+    private CustomerRepository customerRepository;
+    
+    public CommandHandlers commandHandlerDefinitions() {
+        return SagaCommandHandlersBuilder
+                .fromChannel("customerService")
+                .onMessage(ReserveCreditCommand.class, this::reserveCredit)
+                .build();
+    }
+    
+    public Message reserveCredit(CommandMessage<ReserveCreditCommand> cm) {
+        ReserveCreditCommand cmd = cm.getCommand();
+        long customerId = cmd.getCustomerId();
+        Customer customer = customerRepository.findOne(customerId);
+        
+        try {
+            customer.reserveCredit(cmd.getOrderId(), cmd.getOrderTotal());
+            return withSuccess(new CustomerCreditReserved());
+        } catch (CustomerCreditLimitExceededException e) {
+            return withFailure(new CustomerCreditReservationFailed());
+        }
+    }
+}
+```
+
+The above CustomerCommandHandler in the Customer service is invoked for each message that is spread from the Customer
+Service channel. The reserveCredit retrieves the customer and attempts to reserve credit.
+
+#### API design
+Here the Order Service asynchronously invokes the CustomerService and neither publishes nor subscribes to events:
+![image](https://user-images.githubusercontent.com/27693622/231440520-6f8b920e-98e7-401c-ad1d-612bd3a43412.png)
+
+The Customer Service has a simple API with createCustomer() invoked synchronously and reserveCredit() and releaseCredit()
+invoked asynchronously. Like the Order Service it neither publishes nor consumes events:
+
+![image](https://user-images.githubusercontent.com/27693622/231441592-c357b8ed-bd50-4656-983f-355c8aeada3d.png)
+
+#### Message Design
+- Command Message
+  - Headers
+    - Type - identifies the command to invoke
+    - ReplyTo - speicifies the reply channel
+    - SagaId - correlation ID that identifies saga and is returned in the reply
+  - Payload - command arguments
+- Reply Message
+  - Headers
+    - Type - a header identifies the reply type
+    - SagaId - correlation ID that identifies saga
+  - Payload - results, if any
+
+#### Message channel design
+
+![image](https://user-images.githubusercontent.com/27693622/231443608-4f92f376-fc29-4e60-aec2-3f02de935d7f.png)
+
+The orchestrator sends the command to the Customer Service command channel which is a point-to-point channel.
+The centralized orchestrator invokes participants using asynchronous request/response. The ochestrator sends
+a command messsage to a participant's command channel. The participant executes the command and sends a reply message
+to the orchestrator's reply channel. Implementing orchestration-based sagas typically requires a framework but can
+be easier to understand.
+
+```mermaid
+---
+title: "Saga Orchestration: Order Service"
+---
+
+sequenceDiagram
+    autonumber
+    participant OrderService
+    participant CreateOrderSaga
+    participant CustomerService
+    
+    Order Service-> CreateOrderSaga: create()
+    CreateOrderSaga->> CreateOrderSaga: create() Order PENDING
+    CreateOrderSaga -->> Customer Service: ReserveCreditCommand
+    Customer Service->> Customer Service: reserveCredit(Order)
+    
+    alt invalid input
+        Customer Service-->>CreateOrderSaga: CommandReplyOutcome.FAILURE
+        CreateOrderSaga->> CreateOrderSaga: Order REJECTED
+    else valid input
+        Customer Service-->>CreateOrderSaga: CommandReplyOutcome.SUCCESS
+        CreateOrderSaga->> CreateOrderSaga: Order PENDING
+        Note left of Customer Service: Depends on credit available
+    end
+```
+
