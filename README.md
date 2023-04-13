@@ -1213,3 +1213,59 @@ into a single response.
 The API composer invokes the provider synchronously so there can be lower availability and higher response times.
 The Composer should use Timeouts, Retries, Circuit Breaker and use a fallback mechanism for each optional provider:
 empty, default or cached data.
+
+
+### API composition in API Gateway
+
+Here we review the logic for the API gateway in:
+https://github.com/TomSpencerLondon/eventuate-tram-sagas-examples-customers-and-orders
+
+Specifically we are looking at the interactions between:
+- OrderHistoryHandlers - API composition logic
+- CustomerConfiguration - the @Configuration class that configures OrderHistoryHandlers
+- CustomerServiceProxy - the proxy for the Customer Service
+- ProxyConfiguration - the @Configuration class for the proxies
+
+```mermaid
+---
+title: "Saga Orchestration: Get Order History"
+---
+
+sequenceDiagram
+    autonumber
+    actor User
+    participant OrderHistoryHandlers
+    participant CustomerServiceProxy
+    participant OrderServiceProxy
+    
+    User -> OrderHistoryHandlers: getOrderHistory
+
+    OrderHistoryHandlers-->>CustomerServiceProxy: findCustomerById()
+    alt valid input
+      CustomerServiceProxy->> CustomerServiceProxy: Mono(Id)
+      CustomerServiceProxy--> OrderHistoryHandlers: Mono(Id)
+    else invalid id
+      CustomerServiceProxy->> CustomerServiceProxy: Mono(Empty)
+      CustomerServiceProxy->> OrderHistoryHandlers: Mono(Empty)
+    else unknown service
+      CustomerServiceProxy->> CustomerServiceProxy: Mono("Unknown")
+      CustomerServiceProxy->> OrderHistoryHandlers: Mono("Unknown")
+      Note left of CustomerServiceProxy: Depends on valid customerId and known service
+    end
+    
+    OrderHistoryHandlers--> OrderServiceProxy: findOrdersByCustomerId
+    alt valid input
+        OrderServiceProxy->> OrderServiceProxy: status
+        OrderServiceProxy->> OrderServiceProxy: response
+        OrderServiceProxy--> OrderHistoryHandlers: Mono<List<GetOrderResponse>>
+    else invalid id
+        OrderServiceProxy->> OrderServiceProxy: status
+        OrderServiceProxy->> OrderServiceProxy: response
+        OrderServiceProxy--> OrderHistoryHandlers: Mono<Error>
+        Note left of OrderServiceProxy: Depends on status of GetOrderResponse
+    end
+    
+    OrderHistoryHandlers->> OrderHistoryHandlers: possibleCustomerAndOrders()
+    OrderHistoryHandlers->> OrderHistoryHandlers: create GetCustomerHistoryResponse(customerId, customerName, customerCreditLimit, List<GetOrderResponse>)
+    OrderHistoryHandlers--> User: GetOrderHistoryResponse
+```
