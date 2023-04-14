@@ -45,8 +45,11 @@ public class CustomerViewEventsSubscriber {
   }
 
   public void handleAccountCreditedEvent(DomainEventEnvelope<AccountCreditedEvent> de) {
-    throw new RuntimeException("not yet implemented");
-  }
+    AccountCreditedEvent event = de.getEvent();
 
+    customerViewService.creditAccount(de.getEventId(), de.getAggregateId(), Long.toString(event.getCustomerId()),
+            event.getAmount(),
+            event.getNewBalance(), event.getTransactionId());
+  }
 
 }

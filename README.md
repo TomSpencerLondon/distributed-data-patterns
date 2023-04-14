@@ -1269,3 +1269,324 @@ sequenceDiagram
     OrderHistoryHandlers->> OrderHistoryHandlers: create GetCustomerHistoryResponse(customerId, customerName, customerCreditLimit, List<GetOrderResponse>)
     OrderHistoryHandlers--> User: GetOrderHistoryResponse
 ```
+
+#### API Composition in API Gateway (Part 2)
+In this section we are looking at the API Gateway API composition in the application in this repo.
+The API Gateway here is implemented using [Spring Cloud Gateway](https://spring.io/projects/spring-cloud-gateway#learn)
+The API Gateway implements the GET /api/accountAndcustomer/{accountId} endpoint. This endpoint returns information about the
+Account and the account owner. It is implemented using the API composition pattern. The API Gateway queries the AccountService
+and the CustomerService for the response.
+
+This is the code for getting an account with Customer:
+
+```java
+
+public class AccountHandlers {
+
+  private AccountServiceProxy orderService;
+  private CustomerServiceProxy customerService;
+
+  public AccountHandlers(AccountServiceProxy orderService, CustomerServiceProxy customerService) {
+    this.orderService = orderService;
+    this.customerService = customerService;
+  }
+
+  @NotNull
+  public Mono<ServerResponse> getAccountWithCustomer(ServerRequest serverRequest) {
+    String accountId = serverRequest.pathVariable("accountId");
+
+    Mono<Optional<GetAccountResponse>> accountResponse = orderService.findAccountById(accountId);
+
+    return accountResponse
+            .flatMap(maybeAccount -> maybeAccount.map(account -> {
+              Mono<CustomerInfo> customerResponse = customerService.findCustomerById(account.getAccountInfo().getCustomerId());
+              Mono<AccountWithCustomer> accountWithCustomerResponse = customerResponse.map(customer -> new AccountWithCustomer(account, customer));
+              return accountWithCustomerResponse
+                      .flatMap(accountWithCustomer ->
+                              ServerResponse.ok()
+                                      .contentType(MediaType.APPLICATION_JSON)
+                                      .body(fromValue(accountWithCustomer)));
+            }).orElseGet(() -> ServerResponse.notFound().build()));
+
+  }
+
+
+}
+
+```
+
+### Implementing queries using the CQRS pattern
+This is CQRS:
+![image](https://user-images.githubusercontent.com/27693622/231243611-7cc5b72b-b129-480d-993b-e80994d8b8cd.png)
+
+In Command Query Responsibility Segregation we separate the data model into a command side data model for commands
+and a query side data model for queries. Events are then used to keep the query side data model synchronised with the
+command side data model.
+
+![image](https://user-images.githubusercontent.com/27693622/231811461-40938fb9-6d77-4d2a-8190-2cda4e261a6b.png)
+
+CQRS relies on the service publishing events whenever data changes. The events are typically domain-driven design (DDD)
+domain nevents. There different publishing options:
+- Invoke event publishing API/Transactional Outbox pattern
+- Use Event Sourcing
+
+We can persist a customer and their history with Redis.
+
+#### Benefits and drawbacks of CQRS
+- Benefits:
+  - supports multiple denormalized views => improves scalability and performance
+  - separation of concerns = simpler command and query models
+  - necessary in an event sourced architecture
+- Drawbacks:
+  - complexity
+  - cost of replication, e.g. storage
+  - eventually consistent views
+  - potential code duplication
+
+We can use CQRS to implement queries that span services when API composition is inefficient.
+
+#### Design for CQRS
+
+![image](https://user-images.githubusercontent.com/27693622/231814608-278a5096-7215-4fbe-aef2-1676b1ccff93.png)
+
+A CQRS view consists of the database the database schema and three code modules. The event handlers and query API modules
+query and update the database.
+
+Event handlers mut be idempotent this may require tracking the event IDs. Events for orders and customer credit may require
+concurrent updates to the same record. Event handlers must handle "out of order" events so event handlers can't make assumptions
+about the ordering of events. An OrderCreated event could arrive before the CustomerCreated event. For CQRS we do need to support
+updates with PK-based access and FK based access for others. CQRS views can be implemented using a NoSQL database. If using
+analytics we can use relational databases.
+
+![image](https://user-images.githubusercontent.com/27693622/231818389-4b3b669b-ae78-481e-994c-b2fce60d06a4.png)
+
+### CQRS Views <=> Services
+There are three options for CQRS views:
+- Standalone service
+- Part of a service
+- Command-side replica
+
+#### Standalone service
+For example: Order History Service. It is typically a shallow service but it's implementation exists to support the query
+API.
+
+#### Part of a service
+![image](https://user-images.githubusercontent.com/27693622/231820509-8ae17dac-638e-4993-b407-4d0e0ce229d6.png)
+
+We can use CQRS as part of a service. Here we store the restaurants in a MySQL database.
+
+#### Command-side replica
+
+![image](https://user-images.githubusercontent.com/27693622/231823101-bc703353-3cc8-44f3-85e9-0a7facc0578c.png)
+
+Here we replicate the customer credit to the OrderService to avoid having to rely on the CustomerService.
+
+#### CQRS implementation
+Here we will look at the implementation of View Order History:
+https://github.com/TomSpencerLondon/customers-and-orders-eventuate
+```text
+As a Customer
+I want to view my order history
+So that I can see the status of my orders
+```
+
+This is the code for the OrderHistoryEventConsumer:
+```java
+
+public class OrderHistoryEventConsumer {
+
+  private OrderHistoryViewService orderHistoryViewService;
+
+  public OrderHistoryEventConsumer(OrderHistoryViewService orderHistoryViewService) {
+    this.orderHistoryViewService = orderHistoryViewService;
+  }
+
+  public DomainEventHandlers domainEventHandlers() {
+    return DomainEventHandlersBuilder
+            .forAggregateType("io.eventuate.examples.tram.ordersandcustomers.customers.domain.Customer")
+            .onEvent(CustomerCreatedEvent.class, this::customerCreatedEventHandler)
+            .andForAggregateType("io.eventuate.examples.tram.ordersandcustomers.orders.domain.Order")
+            .onEvent(OrderCreatedEvent.class, this::orderCreatedEventHandler)
+            .onEvent(OrderApprovedEvent.class, this::orderApprovedEventHandler)
+            .onEvent(OrderRejectedEvent.class, this::orderRejectedEventHandler)
+            .onEvent(OrderCancelledEvent.class, this::handleOrderCancelledEvent)
+            .build();
+  }
+
+  private void customerCreatedEventHandler(DomainEventEnvelope<CustomerCreatedEvent> domainEventEnvelope) {
+    CustomerCreatedEvent customerCreatedEvent = domainEventEnvelope.getEvent();
+    orderHistoryViewService.createCustomer(Long.parseLong(domainEventEnvelope.getAggregateId()),
+            customerCreatedEvent.getName(), customerCreatedEvent.getCreditLimit());
+  }
+
+  private void orderCreatedEventHandler(DomainEventEnvelope<OrderCreatedEvent> domainEventEnvelope) {
+    OrderCreatedEvent orderCreatedEvent = domainEventEnvelope.getEvent();
+    orderHistoryViewService.addOrder(orderCreatedEvent.getOrderDetails().getCustomerId(),
+            Long.parseLong(domainEventEnvelope.getAggregateId()), orderCreatedEvent.getOrderDetails().getOrderTotal());
+  }
+
+  private void orderApprovedEventHandler(DomainEventEnvelope<OrderApprovedEvent> domainEventEnvelope) {
+    OrderApprovedEvent orderApprovedEvent = domainEventEnvelope.getEvent();
+    orderHistoryViewService.approveOrder(orderApprovedEvent.getOrderDetails().getCustomerId(),
+            Long.parseLong(domainEventEnvelope.getAggregateId()));
+  }
+
+  private void orderRejectedEventHandler(DomainEventEnvelope<OrderRejectedEvent> domainEventEnvelope) {
+    OrderRejectedEvent orderRejectedEvent = domainEventEnvelope.getEvent();
+    orderHistoryViewService.rejectOrder(orderRejectedEvent.getOrderDetails().getCustomerId(),
+            Long.parseLong(domainEventEnvelope.getAggregateId()));
+  }
+
+  private void handleOrderCancelledEvent(DomainEventEnvelope<OrderCancelledEvent> domainEventEnvelope) {
+    OrderCancelledEvent orderRejectedEvent = domainEventEnvelope.getEvent();
+    orderHistoryViewService.cancelOrder(orderRejectedEvent.getOrderDetails().getCustomerId(),
+            Long.parseLong(domainEventEnvelope.getAggregateId()));
+  }
+}
+
+
+```
+
+This is the code for the OrderHistoryViewService:
+```java
+public class OrderHistoryViewService {
+
+  private CustomerViewRepository customerViewRepository;
+
+  public OrderHistoryViewService(CustomerViewRepository customerViewRepository) {
+    this.customerViewRepository = customerViewRepository;
+  }
+
+  @Retryable(
+          value = { DuplicateKeyException.class },
+          maxAttempts = 4,
+          backoff = @Backoff(delay = 250))
+  public void createCustomer(Long customerId, String customerName, Money creditLimit) {
+    customerViewRepository.addCustomer(customerId, customerName, creditLimit);
+  }
+
+  @Retryable(
+          value = { DuplicateKeyException.class },
+          maxAttempts = 4,
+          backoff = @Backoff(delay = 250))
+  public void addOrder(Long customerId, Long orderId, Money orderTotal) {
+    customerViewRepository.addOrder(customerId, orderId, orderTotal);
+  }
+
+  @Retryable(
+          value = { DuplicateKeyException.class },
+          maxAttempts = 4,
+          backoff = @Backoff(delay = 250))
+  public void approveOrder(Long customerId, Long orderId) {
+    updateOrderState(customerId, orderId, OrderState.APPROVED);
+  }
+
+  private void updateOrderState(Long customerId, Long orderId, OrderState state) {
+    customerViewRepository.updateOrderState(customerId, orderId, state);
+  }
+
+  @Retryable(
+          value = { DuplicateKeyException.class },
+          maxAttempts = 4,
+          backoff = @Backoff(delay = 250))
+  public void rejectOrder(Long customerId, Long orderId) {
+    updateOrderState(customerId, orderId, OrderState.REJECTED);
+  }
+
+  @Retryable(
+          value = { DuplicateKeyException.class },
+          maxAttempts = 4,
+          backoff = @Backoff(delay = 250))
+  public void cancelOrder(Long customerId, long orderId) {
+    updateOrderState(customerId, orderId, OrderState.CANCELLED);
+  }
+}
+
+```
+
+```mermaid
+---
+title: "Saga Orchestration: Money Transfer Service"
+---
+
+sequenceDiagram
+    autonumber
+    participant OrderHistoryEventConsumer
+    participant OrderHistoryViewService
+    participant CustomerViewRepositoryCustom
+    
+    OrderHistoryEventConsumer->> OrderHistoryEventConsumer: customerCreatedEventHandler()
+    OrderHistoryEventConsumer--> OrderHistoryViewService: createCustomer()
+    OrderHistoryViewService--> CustomerViewRepositoryCustom: addCustomer()
+    CustomerViewRepositoryCustomer-->OrderHistoryViewService: 
+    OrderHistoryViewService-->OrderHistoryEventConsumer: 
+    OrderHistoryEventConsumer->>OrderHistoryEventConsumer: orderCreatedEventHandler()
+    OrderHistoryEventConsumer-->OrderHistoryViewService: addOrder()
+    OrderHistoryViewService-->CustomerViewRepositoryCustom: addOrder()
+    CustomerViewRepositoryCustom-->OrderHistoryViewService: 
+    OrderHistoryViewService-->OrderHistoryEventConsumer: 
+    OrderHistoryEventConsumer->>OrderHistoryEventConsumer: handleOrderCancelledEvent()
+    OrderHistoryEventConsumer-->OrderHistoryViewService: cancelOrder()
+    OrderHistoryViewService->>OrderHistoryViewService: updateOrderState()
+    OrderHistoryViewService-->CustomerViewRepositoryCustom: updateOrderState()
+    CustomerViewRepositoryCustom-->OrderHistoryViewService: 
+    OrderHistoryViewService-->OrderHistoryEventConsumer: 
+```
+
+### Lab: Implement CQRS
+For this lab we are using the code in this application. The goal of the lab is to implement the CQRS
+pattern for the banking application. We will complete the Customer View Service that subscribes to Customer and
+Account events and maintains a view in MongoDB. It creates a document in MongoDB for each customer. The document
+contains the customer's information, their accounts and the updates to each account. The Customer View Service provides a REST endpoint
+- GET /api/customerview/id - for retrieving the document.
+
+This is the completed CustomerViewEventsSubscriber:
+
+```java
+public class CustomerViewEventsSubscriber {
+
+  private CustomerViewService customerViewService;
+
+  public CustomerViewEventsSubscriber(CustomerViewService customerViewService) {
+    this.customerViewService = customerViewService;
+  }
+
+  public DomainEventHandlers domainEventHandlers() {
+    return DomainEventHandlersBuilder
+            .forAggregateType("net.chrisrichardson.bankingexample.accountservice.backend.Account")
+            .onEvent(AccountOpenedEvent.class, this::handleAccountOpenedEvent)
+            .onEvent(AccountDebitedEvent.class, this::handleAccountDebitedEvent)
+            .onEvent(AccountCreditedEvent.class, this::handleAccountCreditedEvent)
+            .andForAggregateType("net.chrisrichardson.bankingexample.customerservice.backend.Customer")
+            .onEvent(CustomerCreatedEvent.class, this::handleCustomerCreatedEvent)
+            .build();
+  }
+
+
+  public void handleCustomerCreatedEvent(DomainEventEnvelope<CustomerCreatedEvent> dee) {
+    customerViewService.createCustomer(dee.getAggregateId(), dee.getEvent().getCustomerInfo());
+
+  }
+
+  public void handleAccountOpenedEvent(DomainEventEnvelope<AccountOpenedEvent> dee) {
+    customerViewService.openAccount(dee.getEventId(), dee.getAggregateId(), dee.getEvent().getAccountInfo());
+  }
+
+  public void handleAccountDebitedEvent(DomainEventEnvelope<AccountDebitedEvent> de) {
+    AccountDebitedEvent event = de.getEvent();
+    customerViewService.debitAccount(de.getEventId(), de.getAggregateId(), Long.toString(event.getCustomerId()),
+            event.getAmount(),
+            event.getNewBalance(), event.getTransactionId());
+  }
+
+  public void handleAccountCreditedEvent(DomainEventEnvelope<AccountCreditedEvent> de) {
+    AccountCreditedEvent event = de.getEvent();
+
+    customerViewService.creditAccount(de.getEventId(), de.getAggregateId(), Long.toString(event.getCustomerId()),
+            event.getAmount(),
+            event.getNewBalance(), event.getTransactionId());
+  }
+
+
+}
+```

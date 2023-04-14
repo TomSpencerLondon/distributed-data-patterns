@@ -28,7 +28,21 @@ public class AccountHandlers {
 
   @NotNull
   public Mono<ServerResponse> getAccountWithCustomer(ServerRequest serverRequest) {
-    throw new RuntimeException("not yet implemented");
+    String accountId = serverRequest.pathVariable("accountId");
+
+    Mono<Optional<GetAccountResponse>> accountResponse = orderService.findAccountById(accountId);
+
+    return accountResponse
+            .flatMap(maybeAccount -> maybeAccount.map(account -> {
+              Mono<CustomerInfo> customerResponse = customerService.findCustomerById(account.getAccountInfo().getCustomerId());
+              Mono<AccountWithCustomer> accountWithCustomerResponse = customerResponse.map(customer -> new AccountWithCustomer(account, customer));
+              return accountWithCustomerResponse
+                      .flatMap(accountWithCustomer ->
+                              ServerResponse.ok()
+                                      .contentType(MediaType.APPLICATION_JSON)
+                                      .body(fromValue(accountWithCustomer)));
+            }).orElseGet(() -> ServerResponse.notFound().build()));
+
   }
 
 
