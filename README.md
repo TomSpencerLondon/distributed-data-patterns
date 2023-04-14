@@ -1506,31 +1506,38 @@ public class OrderHistoryViewService {
 
 ```mermaid
 ---
-title: "Saga Orchestration: Money Transfer Service"
+title: "CQRS: Money Transfer Service"
 ---
 
 sequenceDiagram
-    autonumber
-    participant OrderHistoryEventConsumer
-    participant OrderHistoryViewService
-    participant CustomerViewRepositoryCustom
-    
-    OrderHistoryEventConsumer->> OrderHistoryEventConsumer: customerCreatedEventHandler()
-    OrderHistoryEventConsumer--> OrderHistoryViewService: createCustomer()
-    OrderHistoryViewService--> CustomerViewRepositoryCustom: addCustomer()
-    CustomerViewRepositoryCustomer-->OrderHistoryViewService: 
-    OrderHistoryViewService-->OrderHistoryEventConsumer: 
-    OrderHistoryEventConsumer->>OrderHistoryEventConsumer: orderCreatedEventHandler()
-    OrderHistoryEventConsumer-->OrderHistoryViewService: addOrder()
-    OrderHistoryViewService-->CustomerViewRepositoryCustom: addOrder()
-    CustomerViewRepositoryCustom-->OrderHistoryViewService: 
-    OrderHistoryViewService-->OrderHistoryEventConsumer: 
-    OrderHistoryEventConsumer->>OrderHistoryEventConsumer: handleOrderCancelledEvent()
-    OrderHistoryEventConsumer-->OrderHistoryViewService: cancelOrder()
-    OrderHistoryViewService->>OrderHistoryViewService: updateOrderState()
-    OrderHistoryViewService-->CustomerViewRepositoryCustom: updateOrderState()
-    CustomerViewRepositoryCustom-->OrderHistoryViewService: 
-    OrderHistoryViewService-->OrderHistoryEventConsumer: 
+  autonumber
+  participant OrderHistoryEventConsumer
+  participant OrderHistoryViewService
+  participant CustomerViewRepositoryCustom
+
+  OrderHistoryEventConsumer->> OrderHistoryEventConsumer: customerCreatedEventHandler()
+  OrderHistoryEventConsumer--> OrderHistoryViewService: createCustomer()
+  OrderHistoryViewService--> CustomerViewRepositoryCustom: addCustomer()
+  CustomerViewRepositoryCustom-->OrderHistoryViewService: return
+  OrderHistoryViewService-->OrderHistoryEventConsumer: return
+  OrderHistoryEventConsumer->>OrderHistoryEventConsumer: orderCreatedEventHandler()
+  OrderHistoryEventConsumer-->OrderHistoryViewService: addOrder()
+  OrderHistoryViewService-->CustomerViewRepositoryCustom: addOrder()
+  CustomerViewRepositoryCustom-->OrderHistoryViewService: return
+  OrderHistoryViewService-->OrderHistoryEventConsumer: return
+  OrderHistoryEventConsumer->>OrderHistoryEventConsumer: orderApprovedEventHandler()
+  OrderHistoryEventConsumer-->OrderHistoryViewService: approveOrder()
+  OrderHistoryViewService->>OrderHistoryViewService: updateOrderState()
+  OrderHistoryViewService-->CustomerViewRepositoryCustom: updateOrderState()
+  CustomerViewRepositoryCustom-->OrderHistoryViewService: return
+  OrderHistoryViewService--> OrderHistoryEventConsumer: return
+  OrderHistoryEventConsumer->>OrderHistoryEventConsumer: handleOrderCancelledEvent()
+  OrderHistoryEventConsumer-->OrderHistoryViewService: cancelOrder()
+  OrderHistoryViewService->>OrderHistoryViewService: updateOrderState()
+  OrderHistoryViewService-->CustomerViewRepositoryCustom: updateOrderState()
+  CustomerViewRepositoryCustom-->OrderHistoryViewService: return
+  OrderHistoryViewService-->OrderHistoryEventConsumer: return
+
 ```
 
 ### Lab: Implement CQRS
